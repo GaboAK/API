@@ -377,5 +377,239 @@ def eliminar_experiencia(id_exp):
     return {
         "mensaje": "Experiencia Eliminada"
     }
+
+    
+#HABILIDADES
+
+
+#REGISTRAR HABILIDAD
+@app.route("/api/experiencias/<int:id_exp>/habilidades", methods=["POST"])
+def registrar_habilidad(id_exp):
+    datos = request.json
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    #VERIFICAR EXP
+    cursor.execute("SELECT id_EXP FROM EXPERIENCIAS WHERE id_EXP = %s", (id_exp,))
+    if not cursor.fetchone():
+        cursor.close()
+        conec.close()
+        return {"mensaje": "Experiencia No Existe"}, 404
+
+    sql = "INSERT INTO HABILIDADES (experiencia_id, nombre) VALUES (%s, %s)"
+    cursor.execute(sql, (id_exp, datos.get("nombre")))
+    conec.commit()
+    id_habilidad = cursor.lastrowid
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "mensaje": "Habilidad Registrada",
+        "id_habilidad": id_habilidad
+    }, 201
+
+
+#CONSULTAR HABILIDADES x EXP
+@app.route("/api/experiencias/<int:id_exp>/habilidades", methods=["GET"])
+def listar_habilidades_experiencia(id_exp):
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    sql = "SELECT * FROM HABILIDADES WHERE experiencia_id = %s"
+    cursor.execute(sql, (id_exp,))
+    datos = cursor.fetchall()
+
+    columnas = [columna[0] for columna in cursor.description]
+    resultado = [dict(zip(columnas, fila)) for fila in datos]
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "experiencia_id": id_exp,
+        "habilidades": resultado
+    }
+
+
+#ACTUALIZAR HABILIADD
+@app.route("/api/habilidades/<int:id_hab>", methods=["PUT"])
+def actualizar_habilidad(id_hab):
+    datos = request.json
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    #VERIFICAR EXISTENCIA HABILIDAD
+    cursor.execute("SELECT id_HAB FROM HABILIDADES WHERE id_HAB = %s", (id_hab,))
+    if not cursor.fetchone():
+        cursor.close()
+        conec.close()
+        return {"mensaje": "Habilidad No Existe"}, 404
+
+    sql = "UPDATE HABILIDADES SET nombre = %s WHERE id_HAB = %s"
+    cursor.execute(sql, (datos.get("nombre"), id_hab))
+    conec.commit()
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "mensaje": "Habilidad Actualizada"
+    }
+
+
+#ELIMINAR HABILIDAD
+@app.route("/api/habilidades/<int:id_hab>", methods=["DELETE"])
+def eliminar_habilidad(id_hab):
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    #VERIFICAR EXISTENCIA HABILIDAD
+    cursor.execute("SELECT id_HAB FROM HABILIDADES WHERE id_HAB = %s", (id_hab,))
+    if not cursor.fetchone():
+        cursor.close()
+        conec.close()
+        return {"mensaje": "Habilidad No Existe"}, 404
+
+    sql = "DELETE FROM HABILIDADES WHERE id_HAB = %s"
+    cursor.execute(sql, (id_hab,))
+    conec.commit()
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "mensaje": "Habilidad Eliminada"
+    }
+
+#CURSO
+
+#REGISTRAR CURSO
+@app.route("/api/hojasvida/<int:id_hv>/cursos", methods=["POST"])
+def registrar_curso(id_hv):
+    datos = request.json
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    #VERIFICAR EXISTENCIA
+    cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE id_HV = %s", (id_hv,))
+    if not cursor.fetchone():
+        cursor.close()
+        conec.close()
+        return {"mensaje": "Hoja de Vida No Existe"}, 404
+
+    sql = "INSERT INTO CURSOS (hoja_vida_id, nombre) VALUES (%s, %s)"
+    cursor.execute(sql, (id_hv, datos.get("nombre")))
+    conec.commit()
+    id_curso = cursor.lastrowid
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "mensaje": "Curso Registrado",
+        "id_curso": id_curso
+    }, 201
+
+
+#CONSULTAR TODOS LOS CURSOS
+@app.route("/api/hojasvida/<int:id_hv>/cursos", methods=["GET"])
+def listar_cursos_hoja_vida(id_hv):
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    sql = "SELECT * FROM CURSOS WHERE hoja_vida_id = %s"
+    cursor.execute(sql, (id_hv,))
+    datos = cursor.fetchall()
+
+    columnas = [columna[0] for columna in cursor.description]
+    resultado = [dict(zip(columnas, fila)) for fila in datos]
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "hoja_vida_id": id_hv,
+        "cursos": resultado
+    }
+
+
+#CONSULTAR CURSO ID
+@app.route("/api/cursos/<int:id_cur>", methods=["GET"])
+def obtener_curso(id_cur):
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    sql = "SELECT * FROM CURSOS WHERE id_CUR = %s"
+    cursor.execute(sql, (id_cur,))
+    curso = cursor.fetchone()
+
+    if not curso:
+        cursor.close()
+        conec.close()
+        return {"mensaje": "Curso No Encontrado"}, 404
+
+    columnas = [columna[0] for columna in cursor.description]
+    resultado = dict(zip(columnas, curso))
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "curso": resultado
+    }
+
+
+#ACTUALIZAR CURSO
+@app.route("/api/cursos/<int:id_cur>", methods=["PUT"])
+def actualizar_curso(id_cur):
+    datos = request.json
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    #VERIFICAR EXISTENCIA CURSO
+    cursor.execute("SELECT id_CUR FROM CURSOS WHERE id_CUR = %s", (id_cur,))
+    if not cursor.fetchone():
+        cursor.close()
+        conec.close()
+        return {"mensaje": "Curso No Existe"}, 404
+
+    sql = "UPDATE CURSOS SET nombre = %s WHERE id_CUR = %s"
+    cursor.execute(sql, (datos.get("nombre"), id_cur))
+    conec.commit()
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "mensaje": "Curso Actualizado"
+    }
+
+
+#ELIMINAR CURSO
+@app.route("/api/cursos/<int:id_cur>", methods=["DELETE"])
+def eliminar_curso(id_cur):
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    #VERIFICAR EXISTENCIA
+    cursor.execute("SELECT id_CUR FROM CURSOS WHERE id_CUR = %s", (id_cur,))
+    if not cursor.fetchone():
+        cursor.close()
+        conec.close()
+        return {"mensaje": "Curso No Existe"}, 404
+
+    sql = "DELETE FROM CURSOS WHERE id_CUR = %s"
+    cursor.execute(sql, (id_cur,))
+    conec.commit()
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "mensaje": "Curso Eliminado"
+    }
+    
+    
 if __name__ == "__main__":
     app.run(debug=True)
