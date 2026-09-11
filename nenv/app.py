@@ -232,6 +232,92 @@ def eliminar_estudio(id_est):
         "mensaje": "Estudio Eliminado"
     }
 
+#EXPERIENCIA
 
+#REGISTRAR EXP
+@app.route("/api/hojasvida/<int:id_hv>/experiencias", methods=["POST"])
+def registrar_experiencia(id_hv):
+    datos = request.json
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    #VERIFICAR EXISTENCIA EXP
+    cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE id_HV = %s", (id_hv,))
+    if not cursor.fetchone():
+        cursor.close()
+        conec.close()
+        return {"mensaje": "Hoja de Vida No Existe"}, 404
+
+    sql = """INSERT INTO EXPERIENCIAS (hoja_vida_id, empresa, cargo, tiempo, funciones)
+             VALUES (%s, %s, %s, %s, %s)"""
+    valores = (
+        id_hv,
+        datos.get("empresa"),
+        datos.get("cargo"),
+        datos.get("tiempo"),
+        datos.get("funciones")
+    )
+
+    cursor.execute(sql, valores)
+    conec.commit()
+    id_experiencia = cursor.lastrowid
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "mensaje": "Experiencia Registrada",
+        "id_experiencia": id_experiencia
+    }, 201
+
+
+#CONSUTLRA TODAS LAS EXP
+@app.route("/api/hojasvida/<int:id_hv>/experiencias", methods=["GET"])
+def listar_experiencias_hoja_vida(id_hv):
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    sql = "SELECT * FROM EXPERIENCIAS WHERE hoja_vida_id = %s"
+    cursor.execute(sql, (id_hv,))
+    datos = cursor.fetchall()
+
+    columnas = [columna[0] for columna in cursor.description]
+    resultado = [dict(zip(columnas, fila)) for fila in datos]
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "hoja_vida_id": id_hv,
+        "experiencias": resultado
+    }
+
+
+#CONSULTAR EXP POR ID
+@app.route("/api/experiencias/<int:id_exp>", methods=["GET"])
+def obtener_experiencia(id_exp):
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    sql = "SELECT * FROM EXPERIENCIAS WHERE id_EXP = %s"
+    cursor.execute(sql, (id_exp,))
+    experiencia = cursor.fetchone()
+
+    if not experiencia:
+        cursor.close()
+        conec.close()
+        return {"mensaje": "Experiencia No Encontrada"}, 404
+
+    columnas = [columna[0] for columna in cursor.description]
+    resultado = dict(zip(columnas, experiencia))
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "experiencia": resultado
+    }
+
+#
 if __name__ == "__main__":
     app.run(debug=True)
