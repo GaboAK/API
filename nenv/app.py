@@ -318,6 +318,64 @@ def obtener_experiencia(id_exp):
         "experiencia": resultado
     }
 
-#
+#ACTUALIZAR EXP
+@app.route("/api/experiencias/<int:id_exp>", methods=["PUT"])
+def actualizar_experiencia(id_exp):
+    datos = request.json
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    #VALIDAR EXP
+    cursor.execute("SELECT id_EXP FROM EXPERIENCIAS WHERE id_EXP = %s", (id_exp,))
+    if not cursor.fetchone():
+        cursor.close()
+        conec.close()
+        return {"mensaje": "Experiencia No Existe"}, 404
+
+    sql = """UPDATE EXPERIENCIAS 
+             SET empresa = %s, cargo = %s, tiempo = %s, funciones = %s 
+             WHERE id_EXP = %s"""
+    valores = (
+        datos.get("empresa"),
+        datos.get("cargo"),
+        datos.get("tiempo"),
+        datos.get("funciones"),
+        id_exp
+    )
+
+    cursor.execute(sql, valores)
+    conec.commit()
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "mensaje": "Experiencia Actualizada"
+    }
+
+
+#ELIMINAR EXP
+@app.route("/api/experiencias/<int:id_exp>", methods=["DELETE"])
+def eliminar_experiencia(id_exp):
+    conec = conectar_bd()
+    cursor = conec.cursor(buffered=True)
+
+    #VERIFICAR EXP 
+    cursor.execute("SELECT id_EXP FROM EXPERIENCIAS WHERE id_EXP = %s", (id_exp,))
+    if not cursor.fetchone():
+        cursor.close()
+        conec.close()
+        return {"mensaje": "Experiencia No Existe"}, 404
+
+    sql = "DELETE FROM EXPERIENCIAS WHERE id_EXP = %s"
+    cursor.execute(sql, (id_exp,))
+    conec.commit()
+
+    cursor.close()
+    conec.close()
+
+    return {
+        "mensaje": "Experiencia Eliminada"
+    }
 if __name__ == "__main__":
     app.run(debug=True)
