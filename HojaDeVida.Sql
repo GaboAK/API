@@ -48,4 +48,18 @@ CREATE TABLE HABILIDADES (
     FOREIGN KEY (experiencia_id) REFERENCES EXPERIENCIAS(id_EXP)
 );
 
-DESCRIBE HOJAS_VIDA;
+CREATE TABLE IF NOT EXISTS USUARIO (
+id_USER INT AUTO_INCREMENT PRIMARY KEY,
+nombre_user VARCHAR(100) NOT NULL,
+correo_user VARCHAR(150) NOT NULL UNIQUE,
+contraseña VARCHAR(255) NOT NULL,
+rol ENUM('Aprendiz','Reclutador') NOT NULL DEFAULT 'Aprendiz',
+estado TINYINT(1) DEFAULT 1,
+fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE HOJAS_VIDA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+ADD COLUMN usuario_ID INT NULL UNIQUE,
+ADD CONSTRAINT hoja_usuario
+FOREIGN KEY (usuario_ID) REFERENCES USUARIO(id_USER)
+;
