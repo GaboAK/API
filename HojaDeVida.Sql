@@ -1,10 +1,19 @@
-CREATE DATABASE HojaDeVida;
-use HojaDeVida;
+CREATE DATABASE IF NOT EXISTS HojaDeVida;
+USE HojaDeVida;
 
-Drop database HojaDeVida;
+CREATE TABLE IF NOT EXISTS USUARIO (
+    id_USER INT AUTO_INCREMENT PRIMARY KEY,
+    nombre_user VARCHAR(100) NOT NULL UNIQUE,
+    correo_user VARCHAR(150) NOT NULL UNIQUE,
+    contraseña VARCHAR(255) NOT NULL,
+    rol ENUM('Aprendiz', 'Reclutador') NOT NULL DEFAULT 'Aprendiz',
+    estado TINYINT(1) DEFAULT 1,
+    fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-CREATE TABLE HOJAS_VIDA (
+CREATE TABLE IF NOT EXISTS HOJAS_VIDA (
     id_HV INT AUTO_INCREMENT PRIMARY KEY,
+    usuario_ID INT NULL UNIQUE,
     nombre VARCHAR(100) NOT NULL,
     edad INT,
     ciudad VARCHAR(100),
@@ -12,54 +21,40 @@ CREATE TABLE HOJAS_VIDA (
     foto VARCHAR(255),
     programa VARCHAR(150),
     ficha VARCHAR(20),
-    jornada VARCHAR(50)
+    jornada VARCHAR(50),
+    FOREIGN KEY (usuario_ID) REFERENCES USUARIO(id_USER) ON DELETE SET NULL
 );
 
-CREATE TABLE ESTUDIOS (
+CREATE TABLE IF NOT EXISTS ESTUDIOS (
     id_EST INT AUTO_INCREMENT PRIMARY KEY,
     hoja_vida_id INT NOT NULL,
+    nivel VARCHAR(100),
     institucion VARCHAR(150),
     titulo VARCHAR(150),
     anio_graduacion INT,
-    FOREIGN KEY (hoja_vida_id) REFERENCES HOJAS_VIDA(id_HV)
+    FOREIGN KEY (hoja_vida_id) REFERENCES HOJAS_VIDA(id_HV) ON DELETE CASCADE
 );
 
-CREATE TABLE CURSOS (
+CREATE TABLE IF NOT EXISTS CURSOS (
     id_CUR INT AUTO_INCREMENT PRIMARY KEY,
     hoja_vida_id INT NOT NULL,
     nombre VARCHAR(150) NOT NULL,
-    FOREIGN KEY (hoja_vida_id) REFERENCES HOJAS_VIDA(id_HV)
+    FOREIGN KEY (hoja_vida_id) REFERENCES HOJAS_VIDA(id_HV) ON DELETE CASCADE
 );
 
-CREATE TABLE EXPERIENCIAS (
+CREATE TABLE IF NOT EXISTS EXPERIENCIAS (
     id_EXP INT AUTO_INCREMENT PRIMARY KEY,
     hoja_vida_id INT NOT NULL,
     empresa VARCHAR(150) NOT NULL,
     cargo VARCHAR(100),
     tiempo VARCHAR(100),
     funciones TEXT,
-    FOREIGN KEY (hoja_vida_id) REFERENCES HOJAS_VIDA(id_HV)
+    FOREIGN KEY (hoja_vida_id) REFERENCES HOJAS_VIDA(id_HV) ON DELETE CASCADE
 );
 
-CREATE TABLE HABILIDADES (
+CREATE TABLE IF NOT EXISTS HABILIDADES (
     id_HAB INT AUTO_INCREMENT PRIMARY KEY,
     experiencia_id INT NOT NULL,
     nombre VARCHAR(100) NOT NULL,
-    FOREIGN KEY (experiencia_id) REFERENCES EXPERIENCIAS(id_EXP)
+    FOREIGN KEY (experiencia_id) REFERENCES EXPERIENCIAS(id_EXP) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS USUARIO (
-id_USER INT AUTO_INCREMENT PRIMARY KEY,
-nombre_user VARCHAR(100) NOT NULL,
-correo_user VARCHAR(150) NOT NULL UNIQUE,
-contraseña VARCHAR(255) NOT NULL,
-rol ENUM('Aprendiz','Reclutador') NOT NULL DEFAULT 'Aprendiz',
-estado TINYINT(1) DEFAULT 1,
-fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-ALTER TABLE HOJAS_VIDA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
-ADD COLUMN usuario_ID INT NULL UNIQUE,
-ADD CONSTRAINT hoja_usuario
-FOREIGN KEY (usuario_ID) REFERENCES USUARIO(id_USER)
-;

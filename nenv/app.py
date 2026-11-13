@@ -1,28 +1,55 @@
+import os
+from functools import wraps
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from database import conectar_bd
 from werkzeug.security import generate_password_hash, check_password_hash
+from dotenv import load_dotenv
+from flask_jwt_extended import (
+    JWTManager,
+    create_access_token,
+    jwt_required,
+    get_jwt_identity,
+    get_jwt,
+)
 
+load_dotenv()
 app = Flask(__name__)
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
+if not app.config["JWT_SECRET_KEY"]:
+    raise ValueError("JWT_SECRET_KEY is not set in the environment variables.")
+jwt = JWTManager(app)
 
-#PAL CORS
-CORS(app, origins=["http://localhost:5173"])
+# CORS
+CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173"], supports_credentials=True)
 
-#PRUEBA
+
+# DECORADOR DE ROLES
+def rol_requerido(rol):
+    def decorator(func):
+        @wraps(func)
+        @jwt_required()
+        def wrapper(*args, **kwargs):
+            claims = get_jwt()
+            if claims.get("rol") != rol:
+                return jsonify({"mensaje": "Acceso denegado"}), 403
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+# PRUEBA DE CONEXIÓN
 @app.route("/probar", methods=["GET"])
 def probar_data():
     conec = None
     try:
         conec = conectar_bd()
         if conec and conec.is_connected():
-            return {"mensaje": "//CONNECTED=!//"}, 200
-        return {"mensaje": "//NO CONNECTION//"}, 500
+            return jsonify({"mensaje": "//CONNECTED=!//"}), 200
+        return jsonify({"mensaje": "//NO CONNECTION//"}), 500
     except Exception as error:
-        print("/probar FAILED", error)
-        return {
-            "mensaje": "//NO CONNECTION//",
-            "error": str(error),
-        }, 500
+        print("/probar FAILED:", error)
+        return jsonify({"mensaje": "//NO CONNECTION//", "error": str(error)}), 500
     finally:
         if conec and conec.is_connected():
             conec.close()
@@ -32,8 +59,9 @@ def probar_data():
 def inicio():
     return "API FUNCTIONAL"
 
-#//10 Noviembre 2026
-#REGISTRO USUARIO
+# GESTIÓN DE USUARIOS
+
+# REGISTRO DE USUARIO
 @app.route("/api/registrousuario", methods=["POST"])
 def registro_usuario():
     conec = None
@@ -41,9 +69,9 @@ def registro_usuario():
     try:
         datos = request.get_json(silent=True)
         if not datos:
-            return {"mensaje": "JSON UNIQUE"}, 400
+            return jsonify({"mensaje": "JSON requerido"}), 400
 
-        #NOdRMALIZAR
+        # Normalización de nombres de campos
         if "nombre_user" not in datos:
             if "nombre" in datos:
                 datos["nombre_user"] = datos["nombre"]
@@ -62,777 +90,1089 @@ def registro_usuario():
             elif "password" in datos:
                 datos["contraseña"] = datos["password"]
 
-        #Xin Dato Vacio
-        campos = [
-            "nombre_user",
-            "correo_user",
-            "contraseña",
-        ]
+        # Validación de campos obligatorios
+        campos = ["nombre_user", "correo_user", "contraseña"]
         for campo in campos:
             if campo not in datos or datos[campo] is None or str(datos[campo]).strip() == "":
-                return {"mensaje": f"CAMPO VACÍO: {campo}"}, 400
+                return jsonify({"mensaje": f"CAMPO VACÍO: {campo}"}), 400
 
-        #CONTRASEÑA Y REQUISITOS
-        contrasena_texto = str(datos["contraseña"]).strip()
-        if len(contrasena_texto) < 8 or len(contrasena_texto) > 15:
-            return {
-                "mensaje": "LA CONTRASEÑA DEBE TENER ENTRE 8 Y 15 CARACTERES"
-            }, 400
-    #
-        contraseña_encriptada = generate_password_hash(contrasena_texto)
+        # Validación de contraseña
+        contraseña_texto = str(datos["contraseña"]).strip()
+        if len(contraseña_texto) < 8 or len(contraseña_texto) > 15:
+            return jsonify({"mensaje": "LA CONTRASEÑA DEBE TENER ENTRE 8 Y 15 CARACTERES"}), 400
 
-        #ROL DEFECTO "APRENDIZ
+        contraseña_encriptada = generate_password_hash(contraseña_texto)
+
+        # Rol por defecto 'Aprendiz'
         rol = datos.get("rol")
-        if not rol or str(rol).strip() == "":
-            rol = "Aprendiz"
-        elif rol not in ["Aprendiz", "Reclutador"]:
+        if not rol or str(rol).strip() == "" or rol not in ["Aprendiz", "Reclutador"]:
             rol = "Aprendiz"
 
         conec = conectar_bd()
         if conec is None or not conec.is_connected():
-            return {"mensaje": "//NO CONNECTION//"}, 500
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
         cursor = conec.cursor(buffered=True)
 
-        #CORREO Y REGISTRO 
-        # 
-        cursor.execute(
-            "SELECT id_USER FROM USUARIO WHERE correo_user = %s",
-            (datos["correo_user"].strip(),),
-        )
+        correo_limpio = datos["correo_user"].strip().lower()
+        nombre_limpio = datos["nombre_user"].strip()
+
+        # Verificar correo existente
+        cursor.execute("SELECT id_USER FROM USUARIO WHERE correo_user = %s", (correo_limpio,))
         if cursor.fetchone():
-            return {"mensaje": "CORREO YA REGISTRADO"}, 409
+            return jsonify({"mensaje": "CORREO YA REGISTRADO"}), 409
 
-        #VERIFICAR
-        cursor.execute(
-            "SELECT id_USER FROM USUARIO WHERE nombre_user = %s",
-            (datos["nombre_user"].strip(),),
-        )
+        # Verificar nombre de usuario existente
+        cursor.execute("SELECT id_USER FROM USUARIO WHERE nombre_user = %s", (nombre_limpio,))
         if cursor.fetchone():
-            return {"mensaje": "USUARIO YA REGISTRADO"}, 409
+            return jsonify({"mensaje": "USUARIO YA REGISTRADO"}), 409
 
-        #REGISTRAR
-        #AGREGAR USUARIO
-        sql = """INSERT INTO USUARIO (nombre_user, correo_user, contraseña, rol) VALUES (%s, %s, %s, %s)"""
-        valores = (
-            datos["nombre_user"].strip(),
-            datos["correo_user"].strip(),
-            contraseña_encriptada,
-            rol,
-        )
-
-        cursor.execute(sql, valores)
+        # Insertar usuario
+        sql = "INSERT INTO USUARIO (nombre_user, correo_user, contraseña, rol) VALUES (%s, %s, %s, %s)"
+        cursor.execute(sql, (nombre_limpio, correo_limpio, contraseña_encriptada, rol))
         conec.commit()
+
         id_generado = cursor.lastrowid
-        return {"mensaje": "USUARIO REGISTRADO", "id": id_generado}, 201
+        return jsonify({"mensaje": "USUARIO REGISTRADO", "id": id_generado, "id_USER": id_generado}), 201
 
     except Exception as error:
         print("ERROR REGISTRANDO USUARIO:", error)
-        if conec:
-            try:
-                conec.rollback()
-            except Exception:
-                pass
-        return {
-            "mensaje": "SERVER FAILURE",
-            "error": str(error),
-        }, 500
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
     finally:
         if cursor:
-            try:
-                cursor.close()
-            except Exception:
-                pass
+            cursor.close()
         if conec and conec.is_connected():
-            try:
-                conec.close()
-            except Exception:
-                pass
+            conec.close()
 
+
+# LOGIN DE USUARIO
 @app.route("/api/login", methods=["POST"])
 def login():
-    pass
+    datos = request.get_json(silent=True)
+    if not datos:
+        return jsonify({"mensaje": "Datos Incompletos"}), 400
 
-#/////////////////////////////////////////////////////
+    correo = (datos.get("correo_user") or datos.get("correo") or datos.get("email") or "").strip().lower()
+    contraseña = datos.get("contraseña") or datos.get("contrasena") or datos.get("password")
+
+    if not correo or not contraseña:
+        return jsonify({"mensaje": "Correo y Contraseña Requeridos"}), 400
+
+    conexion = None
+    cursor = None
+    try:
+        conexion = conectar_bd()
+        if conexion is None or not conexion.is_connected():
+            return jsonify({"mensaje": "Error de conexión a la base de datos"}), 500
+
+        cursor = conexion.cursor(dictionary=True)
+        sql = "SELECT id_USER, nombre_user, correo_user, contraseña, rol, estado FROM USUARIO WHERE correo_user = %s"
+        cursor.execute(sql, (correo,))
+        usuario = cursor.fetchone()
+
+        if not usuario:
+            return jsonify({"mensaje": "Usuario No Encontrado"}), 404
+
+        if not usuario.get("estado"):
+            return jsonify({"mensaje": "Usuario Inactivo"}), 403
+
+        if not check_password_hash(usuario["contraseña"], contraseña):
+            return jsonify({"mensaje": "Contraseña Incorrecta"}), 401
+
+        token = create_access_token(
+            identity=str(usuario["id_USER"]),
+            additional_claims={"rol": usuario["rol"]},
+        )
+
+        return jsonify({
+            "mensaje": "Inicio de Sesión Exitoso",
+            "token": token,
+            "usuario": {
+                "id": usuario["id_USER"],
+                "id_USER": usuario["id_USER"],
+                "nombre": usuario["nombre_user"],
+                "correo": usuario["correo_user"],
+                "rol": usuario["rol"],
+            },
+        }), 200
+
+    except Exception as error:
+        print("ERROR INICIANDO SESIÓN:", error)
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion and conexion.is_connected():
+            conexion.close()
+
+# HOJAS DE VIDA
+
+# REGISTRAR HOJA DE VIDA
 @app.route("/api/registrohv", methods=["POST"])
+@jwt_required()
 def registrohvida():
     conec = None
     cursor = None
     try:
         datos = request.get_json(silent=True)
         if not datos:
-            return {"mensaje": "JSON UNIQUE"}, 400
+            return jsonify({"mensaje": "JSON requerido"}), 400
 
-        campos = [
-            "nombre",
-            "edad",
-            "ciudad",
-            "correo",
-            "programa",
-            "ficha",
-            "jornada",
-        ]
+        usuario_id = int(get_jwt_identity())
+
+        campos = ["nombre", "edad", "ciudad", "correo", "programa", "ficha", "jornada"]
         for campo in campos:
-            if campo not in datos:
-                return {"mensaje": f"CAMPO VACÍO: {campo}"}, 400
+            if campo not in datos or datos[campo] is None or str(datos[campo]).strip() == "":
+                return jsonify({"mensaje": f"CAMPO VACÍO: {campo}"}), 400
 
         conec = conectar_bd()
         if conec is None or not conec.is_connected():
-            return {"mensaje": "//NO CONNECTION//"}, 500
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
         cursor = conec.cursor(buffered=True)
 
-        #VERIFICAR CORREO
-        cursor.execute(
-            "SELECT id FROM hojas_vida WHERE correo = %s", (datos["correo"],)
-        )
+        # Verificar si el usuario ya tiene hoja de vida registrada
+        cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE usuario_ID = %s", (usuario_id,))
         if cursor.fetchone():
-            return {"mensaje": "CORREO YA REGISTRADO"}, 409
+            return jsonify({"mensaje": "EL USUARIO YA TIENE UNA HOJA DE VIDA REGISTRADA"}), 409
 
-        #AGREGAR HV
-        sql = """INSERT INTO hojas_vida (nombre, edad, ciudad, correo, fotografia, programa, ficha, jornada) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+        # Verificar correo único en hojas de vida
+        cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE correo = %s", (datos["correo"].strip().lower(),))
+        if cursor.fetchone():
+            return jsonify({"mensaje": "CORREO YA REGISTRADO"}), 409
+
+        foto_valor = datos.get("foto") or datos.get("fotografia")
+
+        sql = """INSERT INTO HOJAS_VIDA (usuario_ID, nombre, edad, ciudad, correo, foto, programa, ficha, jornada) 
+                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
         valores = (
-            datos["nombre"],
+            usuario_id,
+            datos["nombre"].strip(),
             datos["edad"],
-            datos["ciudad"],
-            datos["correo"],
-            datos.get("fotografia") or datos.get("foto"),
-            datos["programa"],
-            datos["ficha"],
-            datos["jornada"],
+            datos["ciudad"].strip(),
+            datos["correo"].strip().lower(),
+            foto_valor,
+            datos["programa"].strip(),
+            datos["ficha"].strip(),
+            datos["jornada"].strip(),
         )
 
         cursor.execute(sql, valores)
         conec.commit()
         id_generado = cursor.lastrowid
-        return {"mensaje": "HOJA DE VIDA CREADA", "id": id_generado}, 201
+        return jsonify({"mensaje": "HOJA DE VIDA CREADA", "id": id_generado, "id_HV": id_generado}), 201
 
     except Exception as error:
         print("ERROR REGISTRANDO HOJA DE VIDA:", error)
-        if conec:
-            try:
-                conec.rollback()
-            except Exception:
-                pass
-        return {
-            "mensaje": "SERVER FAILURE",
-            "error": str(error),
-        }, 500
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
     finally:
         if cursor:
-            try:
-                cursor.close()
-            except Exception:
-                pass
+            cursor.close()
         if conec and conec.is_connected():
-            try:
-                conec.close()
-            except Exception:
-                pass
+            conec.close()
 
-#HV
+
+# CONSULTAR TODAS LAS HOJAS DE VIDA (Sólo Reclutadores)
 @app.route("/api/hojasdevida", methods=["GET"])
 @app.route("/api/hojasvida", methods=["GET"])
-
-#CONSULTA HV
+@rol_requerido("Reclutador")
 def obtener_hojasvida():
-    conec = conectar_bd()
-    cursor = conec.cursor(dictionary=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT * FROM hojas_vida")
-    hojasdevida = cursor.fetchall()
+        cursor = conec.cursor(dictionary=True)
+        cursor.execute("SELECT id_HV, id_HV AS id, usuario_ID, nombre, edad, ciudad, correo, foto, foto AS fotografia, programa, ficha, jornada FROM HOJAS_VIDA")
+        hojasdevida = cursor.fetchall()
 
-    cursor.close()
-    conec.close()
-    return jsonify({"hojas_vida": hojasdevida}), 200
+        return jsonify({"hojas_vida": hojasdevida}), 200
+    except Exception as error:
+        print("ERROR CONSULTANDO HOJAS DE VIDA:", error)
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 
-#HV POR ID
+
+# CONSULTAR HOJA DE VIDA POR ID
 @app.route("/api/hojasdevida/<int:id>", methods=["GET"])
+@app.route("/api/hojasvida/<int:id>", methods=["GET"])
 def obtener_hojasvidaid(id):
-    conec = conectar_bd()
-    cursor = conec.cursor(dictionary=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT * FROM hojas_vida WHERE id = %s", (id,))
-    hoja = cursor.fetchone()
+        cursor = conec.cursor(dictionary=True)
+        cursor.execute("SELECT id_HV, id_HV AS id, usuario_ID, nombre, edad, ciudad, correo, foto, foto AS fotografia, programa, ficha, jornada FROM HOJAS_VIDA WHERE id_HV = %s", (id,))
+        hoja = cursor.fetchone()
 
-    cursor.close()
-    conec.close()
+        if hoja is None:
+            return jsonify({"mensaje": "HOJA DE VIDA NO ENCONTRADA"}), 404
+        return jsonify(hoja), 200
+    except Exception as error:
+        print("ERROR OBTENIENDO HOJA DE VIDA:", error)
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 
-    if hoja is None:
-        return {"mensaje": "HOJA DE VIDA NO ENCONTRADA"}, 404
-    return hoja, 200
 
-#ACTUALIZAR HV
+# ACTUALIZAR HOJA DE VIDA
 @app.route("/api/actualizarhv/<int:id>", methods=["PUT"])
+@jwt_required()
 def actualizar_hv(id):
-    datos = request.get_json()
-    if not datos:
-        return {"mensaje": "JSON UNIQUE"}, 400
+    conec = None
+    cursor = None
+    try:
+        datos = request.get_json(silent=True)
+        if not datos:
+            return jsonify({"mensaje": "JSON requerido"}), 400
 
-    campos = [
-        "nombre",
-        "edad",
-        "ciudad",
-        "correo",
-        "programa",
-        "ficha",
-        "jornada",
-    ]
-    for campo in campos:
-        if campo not in datos:
-            return {"mensaje": f"CAMPO VACÍO: {campo}"}, 400
+        campos = ["nombre", "edad", "ciudad", "correo", "programa", "ficha", "jornada"]
+        for campo in campos:
+            if campo not in datos or datos[campo] is None or str(datos[campo]).strip() == "":
+                return jsonify({"mensaje": f"CAMPO VACÍO: {campo}"}), 400
 
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT id FROM hojas_vida WHERE id = %s", (id,))
-    if cursor.fetchone() is None:
-        cursor.close()
-        conec.close()
-        return {"mensaje": "HOJA DE VIDA NO ENCONTRADA"}, 404
+        cursor = conec.cursor(buffered=True)
 
-    cursor.execute(
-        "SELECT id FROM hojas_vida WHERE correo = %s AND id != %s",
-        (datos["correo"], id),
-    )
-    if cursor.fetchone() is not None:
-        cursor.close()
-        conec.close()
-        return {
-            "mensaje": "CORREO YA EXISTENTE"
-        }, 409
+        cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE id_HV = %s", (id,))
+        if cursor.fetchone() is None:
+            return jsonify({"mensaje": "HOJA DE VIDA NO ENCONTRADA"}), 404
 
-    sql = """UPDATE hojas_vida SET nombre = %s, edad = %s, ciudad = %s, correo = %s, fotografia = %s, programa = %s, ficha = %s, jornada = %s WHERE id = %s"""
-    valores = (
-        datos["nombre"],
-        datos["edad"],
-        datos["ciudad"],
-        datos["correo"],
-        datos.get("fotografia") or datos.get("foto"),
-        datos["programa"],
-        datos["ficha"],
-        datos["jornada"],
-        id,
-    )
+        correo_limpio = datos["correo"].strip().lower()
+        cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE correo = %s AND id_HV != %s", (correo_limpio, id))
+        if cursor.fetchone() is not None:
+            return jsonify({"mensaje": "CORREO YA EXISTENTE"}), 409
 
-    cursor.execute(sql, valores)
-    conec.commit()
+        foto_valor = datos.get("foto") or datos.get("fotografia")
 
-    cursor.close()
-    conec.close()
-    return {"mensaje": "HOJA DE VIDA ACTUALIZADA", "id": id}, 200
-#ELIMINAR HOJA DE VIDA
+        sql = """UPDATE HOJAS_VIDA SET nombre = %s, edad = %s, ciudad = %s, correo = %s, foto = %s, programa = %s, ficha = %s, jornada = %s WHERE id_HV = %s"""
+        valores = (
+            datos["nombre"].strip(),
+            datos["edad"],
+            datos["ciudad"].strip(),
+            correo_limpio,
+            foto_valor,
+            datos["programa"].strip(),
+            datos["ficha"].strip(),
+            datos["jornada"].strip(),
+            id,
+        )
+
+        cursor.execute(sql, valores)
+        conec.commit()
+        return jsonify({"mensaje": "HOJA DE VIDA ACTUALIZADA", "id": id, "id_HV": id}), 200
+
+    except Exception as error:
+        print("ERROR ACTUALIZANDO HOJA DE VIDA:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+
+
+# ELIMINAR HOJA DE VIDA
 @app.route("/api/eliminarhv/<int:id>", methods=["DELETE"])
-
+@jwt_required()
 def eliminar_hv(id):
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT id FROM hojas_vida WHERE id = %s", (id,))
-    if cursor.fetchone() is None:
-        cursor.close()
-        conec.close()
-        return {"mensaje": "HOJA DE VIDA NO ECONTRADA"}, 404
+        cursor = conec.cursor(buffered=True)
 
-    cursor.execute("DELETE FROM hojas_vida WHERE id = %s", (id,))
-    conec.commit()
+        cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE id_HV = %s", (id,))
+        if cursor.fetchone() is None:
+            return jsonify({"mensaje": "HOJA DE VIDA NO ENCONTRADA"}), 404
 
-    cursor.close()
-    conec.close()
-    return {"mensaje": "HOJA DE VIDA ELIMINADA", "id": id}, 200
+        cursor.execute("DELETE FROM HOJAS_VIDA WHERE id_HV = %s", (id,))
+        conec.commit()
+
+        return jsonify({"mensaje": "HOJA DE VIDA ELIMINADA", "id": id, "id_HV": id}), 200
+
+    except Exception as error:
+        print("ERROR ELIMINANDO HOJA DE VIDA:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 
 # ESTUDIOS
+
+# REGISTRAR ESTUDIO
 @app.route("/api/hojasvida/<int:id_hv>/estudios", methods=["POST"])
 @app.route("/api/HOJAS_VIDA/<int:id_hv>/estudios", methods=["POST"])
-
-#REGISTRO ESTUDIO
 def registrar_estudio(id_hv):
-    datos = request.get_json()
-    if not datos:
-        return {"mensaje": "JSON UNIQUE"}, 400
+    conec = None
+    cursor = None
+    try:
+        datos = request.get_json(silent=True)
+        if not datos:
+            return jsonify({"mensaje": "JSON requerido"}), 400
 
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT id FROM hojas_vida WHERE id = %s", (id_hv,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "HOJA DE VIDA INEXISTENTE"}, 404
+        cursor = conec.cursor(buffered=True)
 
-    sql = """INSERT INTO estudios (hoja_vida_id, nivel, institucion, titulo, anio_graduacion) VALUES (%s, %s, %s, %s, %s)"""
-    valores = (
-        id_hv,
-        datos.get("nivel"),
-        datos.get("institucion"),
-        datos.get("titulo"),
-        datos.get("anio_graduacion"),
-    )
+        cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE id_HV = %s", (id_hv,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "HOJA DE VIDA INEXISTENTE"}), 404
 
-    cursor.execute(sql, valores)
-    conec.commit()
-    id_estudio = cursor.lastrowid
+        sql = """INSERT INTO ESTUDIOS (hoja_vida_id, nivel, institucion, titulo, anio_graduacion) VALUES (%s, %s, %s, %s, %s)"""
+        valores = (
+            id_hv,
+            datos.get("nivel"),
+            datos.get("institucion"),
+            datos.get("titulo"),
+            datos.get("anio_graduacion"),
+        )
 
-    cursor.close()
-    conec.close()
+        cursor.execute(sql, valores)
+        conec.commit()
+        id_estudio = cursor.lastrowid
 
-    return {
-        "mensaje": "ESTUDIO REGISTRADO",
-        "id_estudio": id_estudio,
-        "hoja_vida_id": id_hv,
-    }, 201
+        return jsonify({
+            "mensaje": "ESTUDIO REGISTRADO",
+            "id_estudio": id_estudio,
+            "id_EST": id_estudio,
+            "hoja_vida_id": id_hv,
+        }), 201
+
+    except Exception as error:
+        print("ERROR REGISTRANDO ESTUDIO:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 
 
+# LISTAR ESTUDIOS DE UNA HOJA DE VIDA
 @app.route("/api/hojasvida/<int:id_hv>/estudios", methods=["GET"])
 @app.route("/api/HOJAS_VIDA/<int:id_hv>/estudios", methods=["GET"])
-
 def listar_estudios_hoja_vida(id_hv):
-    conec = conectar_bd()
-    cursor = conec.cursor(dictionary=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT id FROM hojas_vida WHERE id = %s", (id_hv,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "HOJA DE VIDA INEXISTNETE"}, 404
+        cursor = conec.cursor(dictionary=True)
 
-    cursor.execute(
-        "SELECT * FROM estudios WHERE hoja_vida_id = %s", (id_hv,)
-    )
-    estudios = cursor.fetchall()
+        cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE id_HV = %s", (id_hv,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "HOJA DE VIDA INEXISTENTE"}), 404
 
-    cursor.close()
-    conec.close()
+        cursor.execute("SELECT id_EST, id_EST AS id, hoja_vida_id, nivel, institucion, titulo, anio_graduacion FROM ESTUDIOS WHERE hoja_vida_id = %s", (id_hv,))
+        estudios = cursor.fetchall()
 
-    return {"hoja_vida_id": id_hv, "estudios": estudios}, 200
+        return jsonify({"hoja_vida_id": id_hv, "estudios": estudios}), 200
 
-#
+    except Exception as error:
+        print("ERROR LISTANDO ESTUDIOS:", error)
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+
+
+# CONSULTAR ESTUDIO POR ID
 @app.route("/api/estudios/<int:id_est>", methods=["GET"])
-#CONSULTA ESTUDIO ID
 def obtener_estudio(id_est):
-    conec = conectar_bd()
-    cursor = conec.cursor(dictionary=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT * FROM estudios WHERE id = %s", (id_est,))
-    estudio = cursor.fetchone()
+        cursor = conec.cursor(dictionary=True)
+        cursor.execute("SELECT id_EST, id_EST AS id, hoja_vida_id, nivel, institucion, titulo, anio_graduacion FROM ESTUDIOS WHERE id_EST = %s", (id_est,))
+        estudio = cursor.fetchone()
 
-    cursor.close()
-    conec.close()
+        if not estudio:
+            return jsonify({"mensaje": "ESTUDIO NO ENCONTRADO"}), 404
 
-    if not estudio:
-        return {"mensaje": "ESTUDIO NO ENCONTRADO"}, 404
+        return jsonify({"estudio": estudio}), 200
 
-    return {"estudio": estudio}, 200
+    except Exception as error:
+        print("ERROR OBTENIENDO ESTUDIO:", error)
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 
 
+# ACTUALIZAR ESTUDIO
 @app.route("/api/estudios/<int:id_est>", methods=["PUT"])
 def actualizar_estudio(id_est):
-    datos = request.get_json()
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+    conec = None
+    cursor = None
+    try:
+        datos = request.get_json(silent=True)
+        if not datos:
+            return jsonify({"mensaje": "JSON requerido"}), 400
 
-    cursor.execute("SELECT id FROM estudios WHERE id = %s", (id_est,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "ESTUDIO INEXISTENTE"}, 404
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    sql = """UPDATE estudios SET nivel = %s, institucion = %s, titulo = %s, anio_graduacion = %s WHERE id = %s"""
-    valores = (
-        datos.get("nivel"),
-        datos.get("institucion"),
-        datos.get("titulo"),
-        datos.get("anio_graduacion"),
-        id_est,
-    )
+        cursor = conec.cursor(buffered=True)
+        cursor.execute("SELECT id_EST FROM ESTUDIOS WHERE id_EST = %s", (id_est,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "ESTUDIO INEXISTENTE"}), 404
 
-    cursor.execute(sql, valores)
-    conec.commit()
+        sql = """UPDATE ESTUDIOS SET nivel = %s, institucion = %s, titulo = %s, anio_graduacion = %s WHERE id_EST = %s"""
+        valores = (
+            datos.get("nivel"),
+            datos.get("institucion"),
+            datos.get("titulo"),
+            datos.get("anio_graduacion"),
+            id_est,
+        )
 
-    cursor.close()
-    conec.close()
+        cursor.execute(sql, valores)
+        conec.commit()
 
-    return {"mensaje": "ESTUDIO ACTUALIZADO"}
+        return jsonify({"mensaje": "ESTUDIO ACTUALIZADO", "id_estudio": id_est, "id_EST": id_est}), 200
 
-#ELIMINAR ESTUDIO
+    except Exception as error:
+        print("ERROR ACTUALIZANDO ESTUDIO:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+
+
+# ELIMINAR ESTUDIO
 @app.route("/api/estudios/<int:id_est>", methods=["DELETE"])
-
 def eliminar_estudio(id_est):
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT id FROM estudios WHERE id = %s", (id_est,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "ESTUDIO NOT EXISTS"}, 404
+        cursor = conec.cursor(buffered=True)
+        cursor.execute("SELECT id_EST FROM ESTUDIOS WHERE id_EST = %s", (id_est,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "ESTUDIO INEXISTENTE"}), 404
 
-    cursor.execute("DELETE FROM estudios WHERE id = %s", (id_est,))
-    conec.commit()
+        cursor.execute("DELETE FROM ESTUDIOS WHERE id_EST = %s", (id_est,))
+        conec.commit()
 
-    cursor.close()
-    conec.close()
+        return jsonify({"mensaje": "ESTUDIO ELIMINADO", "id_estudio": id_est, "id_EST": id_est}), 200
 
-    return {"mensaje": "ESTUDIO DELETED"}
+    except Exception as error:
+        print("ERROR ELIMINANDO ESTUDIO:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 
 # EXPERIENCIAS
+
+# REGISTRAR EXPERIENCIA
 @app.route("/api/hojasvida/<int:id_hv>/experiencias", methods=["POST"])
 @app.route("/api/HOJAS_VIDA/<int:id_hv>/EXPERIENCIAS", methods=["POST"])
-#
-#REGISTRAR EXP
 def registrar_experiencia(id_hv):
-    datos = request.get_json()
-    if not datos:
-        return {"mensaje": "JSON UNIQUE"}, 400
+    conec = None
+    cursor = None
+    try:
+        datos = request.get_json(silent=True)
+        if not datos:
+            return jsonify({"mensaje": "JSON requerido"}), 400
 
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT id FROM hojas_vida WHERE id = %s", (id_hv,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "HOJA DE VIDA INEXISTENTE"}, 404
+        cursor = conec.cursor(buffered=True)
+        cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE id_HV = %s", (id_hv,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "HOJA DE VIDA INEXISTENTE"}), 404
 
-    sql = """INSERT INTO experiencias (hoja_vida_id, empresa, cargo, tiempo, funciones) VALUES (%s, %s, %s, %s, %s)"""
-    valores = (
-        id_hv,
-        datos.get("empresa"),
-        datos.get("cargo"),
-        datos.get("tiempo"),
-        datos.get("funciones"),
-    )
+        sql = """INSERT INTO EXPERIENCIAS (hoja_vida_id, empresa, cargo, tiempo, funciones) VALUES (%s, %s, %s, %s, %s)"""
+        valores = (
+            id_hv,
+            datos.get("empresa"),
+            datos.get("cargo"),
+            datos.get("tiempo"),
+            datos.get("funciones"),
+        )
 
-    cursor.execute(sql, valores)
-    conec.commit()
-    id_experiencia = cursor.lastrowid
+        cursor.execute(sql, valores)
+        conec.commit()
+        id_experiencia = cursor.lastrowid
 
-    cursor.close()
-    conec.close()
+        return jsonify({
+            "mensaje": "EXPERIENCIA REGISTRADA",
+            "id_experiencia": id_experiencia,
+            "id_EXP": id_experiencia,
+            "hoja_vida_id": id_hv,
+        }), 201
 
-    return {
-        "mensaje": "EXPERIENCIA REGISTRADA",
-        "id_experiencia": id_experiencia,
-        "hoja_vida_id": id_hv,
-    }, 201
+    except Exception as error:
+        print("ERROR REGISTRANDO EXPERIENCIA:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 
 
+# LISTAR EXPERIENCIAS DE UNA HOJA DE VIDA
 @app.route("/api/hojasvida/<int:id_hv>/experiencias", methods=["GET"])
 def listar_experiencias_hoja_vida(id_hv):
-    
-    conec = conectar_bd()
-    cursor = conec.cursor(dictionary=True)
-    cursor.execute(
-        "SELECT * FROM experiencias WHERE hoja_vida_id = %s", (id_hv,)
-    )
-    resultado = cursor.fetchall()
-    cursor.close()
-    conec.close()
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    return {"hoja_vida_id": id_hv, "experiencias": resultado}, 200
+        cursor = conec.cursor(dictionary=True)
+        cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE id_HV = %s", (id_hv,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "HOJA DE VIDA INEXISTENTE"}), 404
+
+        cursor.execute("SELECT id_EXP, id_EXP AS id, hoja_vida_id, empresa, cargo, tiempo, funciones FROM EXPERIENCIAS WHERE hoja_vida_id = %s", (id_hv,))
+        resultado = cursor.fetchall()
+
+        return jsonify({"hoja_vida_id": id_hv, "experiencias": resultado}), 200
+
+    except Exception as error:
+        print("ERROR LISTANDO EXPERIENCIAS:", error)
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 
 
+# CONSULTAR EXPERIENCIA POR ID
 @app.route("/api/experiencias/<int:id_exp>", methods=["GET"])
-
 def obtener_experiencia(id_exp):
-    conec = conectar_bd()
-    cursor = conec.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM experiencias WHERE id = %s", (id_exp,))
-    experiencia = cursor.fetchone()
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.close()
-    conec.close()
+        cursor = conec.cursor(dictionary=True)
+        cursor.execute("SELECT id_EXP, id_EXP AS id, hoja_vida_id, empresa, cargo, tiempo, funciones FROM EXPERIENCIAS WHERE id_EXP = %s", (id_exp,))
+        experiencia = cursor.fetchone()
 
-    if not experiencia:
-        return {"mensaje": "EXPERIENCIA NO ENCNONTRADA"}, 404
-    return {"experiencia": experiencia}, 200
+        if not experiencia:
+            return jsonify({"mensaje": "EXPERIENCIA NO ENCONTRADA"}), 404
+        return jsonify({"experiencia": experiencia}), 200
 
-#ACTUALIZAR EXP
+    except Exception as error:
+        print("ERROR OBTENIENDO EXPERIENCIA:", error)
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+
+
+# ACTUALIZAR EXPERIENCIA
 @app.route("/api/experiencias/<int:id_exp>", methods=["PUT"])
 def actualizar_experiencia(id_exp):
-    datos = request.get_json()
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+    conec = None
+    cursor = None
+    try:
+        datos = request.get_json(silent=True)
+        if not datos:
+            return jsonify({"mensaje": "JSON requerido"}), 400
 
-    cursor.execute("SELECT id FROM experiencias WHERE id = %s", (id_exp,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "EXPERIENCIA INEXISTENTE"}, 404
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    sql = """UPDATE experiencias SET empresa = %s, cargo = %s, tiempo = %s, funciones = %s WHERE id = %s"""
-    valores = (
-        datos.get("empresa"),
-        datos.get("cargo"),
-        datos.get("tiempo"),
-        datos.get("funciones"),
-        id_exp,
-    )
+        cursor = conec.cursor(buffered=True)
+        cursor.execute("SELECT id_EXP FROM EXPERIENCIAS WHERE id_EXP = %s", (id_exp,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "EXPERIENCIA INEXISTENTE"}), 404
 
-    cursor.execute(sql, valores)
-    conec.commit()
-    cursor.close()
-    conec.close()
+        sql = """UPDATE EXPERIENCIAS SET empresa = %s, cargo = %s, tiempo = %s, funciones = %s WHERE id_EXP = %s"""
+        valores = (
+            datos.get("empresa"),
+            datos.get("cargo"),
+            datos.get("tiempo"),
+            datos.get("funciones"),
+            id_exp,
+        )
 
-    return {"mensaje": "EXPERIENCIA ACTUALIZADO"}
+        cursor.execute(sql, valores)
+        conec.commit()
 
-#ELIMINAR EXP
+        return jsonify({"mensaje": "EXPERIENCIA ACTUALIZADA", "id_experiencia": id_exp, "id_EXP": id_exp}), 200
+
+    except Exception as error:
+        print("ERROR ACTUALIZANDO EXPERIENCIA:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+
+
+# ELIMINAR EXPERIENCIA
 @app.route("/api/experiencias/<int:id_exp>", methods=["DELETE"])
 def eliminar_experiencia(id_exp):
-    
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
-    cursor.execute("SELECT id FROM experiencias WHERE id = %s", (id_exp,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "EXPERIENCIA INEXISTENTE"}, 404
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("DELETE FROM experiencias WHERE id = %s", (id_exp,))
-    conec.commit()
+        cursor = conec.cursor(buffered=True)
+        cursor.execute("SELECT id_EXP FROM EXPERIENCIAS WHERE id_EXP = %s", (id_exp,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "EXPERIENCIA INEXISTENTE"}), 404
 
-    cursor.close()
-    conec.close()
-    return {"mensaje": "EXPERIENCIA ELIMINADA"}
+        cursor.execute("DELETE FROM EXPERIENCIAS WHERE id_EXP = %s", (id_exp,))
+        conec.commit()
 
+        return jsonify({"mensaje": "EXPERIENCIA ELIMINADA", "id_experiencia": id_exp, "id_EXP": id_exp}), 200
+
+    except Exception as error:
+        print("ERROR ELIMINANDO EXPERIENCIA:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 # HABILIDADES
+
+# REGISTRAR HABILIDAD
 @app.route("/api/experiencias/<int:id_exp>/habilidades", methods=["POST"])
 @app.route("/api/HABILIDADES/<int:id_exp>", methods=["POST"])
-
-#REGISTRAR HABILIDAD
 def registrar_habilidad(id_exp):
-    datos = request.get_json()
-    if not datos or "nombre" not in datos:
-        return {"mensaje": "NOMBRE FALTANTE"}, 400
+    conec = None
+    cursor = None
+    try:
+        datos = request.get_json(silent=True)
+        if not datos or "nombre" not in datos or not str(datos["nombre"]).strip():
+            return jsonify({"mensaje": "NOMBRE FALTANTE"}), 400
 
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT id FROM experiencias WHERE id = %s", (id_exp,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "EXPERIENCIA INEXISTENTE"}, 404
+        cursor = conec.cursor(buffered=True)
+        cursor.execute("SELECT id_EXP FROM EXPERIENCIAS WHERE id_EXP = %s", (id_exp,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "EXPERIENCIA INEXISTENTE"}), 404
 
-    sql = "INSERT INTO habilidades (experiencia_id, nombre) VALUES (%s, %s)"
-    cursor.execute(sql, (id_exp, datos.get("nombre")))
-    conec.commit()
-    id_habilidad = cursor.lastrowid
+        sql = "INSERT INTO HABILIDADES (experiencia_id, nombre) VALUES (%s, %s)"
+        cursor.execute(sql, (id_exp, datos.get("nombre").strip()))
+        conec.commit()
+        id_habilidad = cursor.lastrowid
 
-    cursor.close()
-    conec.close()
+        return jsonify({
+            "mensaje": "HABILIDAD REGISTRADA",
+            "id_habilidad": id_habilidad,
+            "id_HAB": id_habilidad,
+            "experiencia_id": id_exp,
+        }), 201
 
-    return {
-        "mensaje": "HABILIDAD REGISTRADA",
-        "id_habilidad": id_habilidad,
-        "experiencia_id": id_exp,
-    }, 201
+    except Exception as error:
+        print("ERROR REGISTRANDO HABILIDAD:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 
 
+# LISTAR HABILIDADES DE UNA EXPERIENCIA
 @app.route("/api/experiencias/<int:id_exp>/habilidades", methods=["GET"])
-#CONSULTA EXP
 def listar_habilidades_experiencia(id_exp):
-    conec = conectar_bd()
-    cursor = conec.cursor(dictionary=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute(
-        "SELECT * FROM habilidades WHERE experiencia_id = %s", (id_exp,))
-    resultado = cursor.fetchall()
+        cursor = conec.cursor(dictionary=True)
+        cursor.execute("SELECT id_EXP FROM EXPERIENCIAS WHERE id_EXP = %s", (id_exp,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "EXPERIENCIA INEXISTENTE"}), 404
 
-    cursor.close()
-    conec.close()
-    return {"experiencia_id": id_exp, "habilidades": resultado}, 200
+        cursor.execute("SELECT id_HAB, id_HAB AS id, experiencia_id, nombre FROM HABILIDADES WHERE experiencia_id = %s", (id_exp,))
+        resultado = cursor.fetchall()
 
+        return jsonify({"experiencia_id": id_exp, "habilidades": resultado}), 200
+
+    except Exception as error:
+        print("ERROR LISTANDO HABILIDADES:", error)
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+
+
+# ACTUALIZAR HABILIDAD
 @app.route("/api/habilidades/<int:id_hab>", methods=["PUT"])
-
-#ACTUALIZAR HABILIDAD
 def actualizar_habilidad(id_hab):
-    datos = request.get_json()
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+    conec = None
+    cursor = None
+    try:
+        datos = request.get_json(silent=True)
+        if not datos or "nombre" not in datos or not str(datos["nombre"]).strip():
+            return jsonify({"mensaje": "NOMBRE FALTANTE"}), 400
 
-    cursor.execute("SELECT id FROM habilidades WHERE id = %s", (id_hab,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "HABILIDAD INEXISTENTE"}, 404
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    sql = "UPDATE habilidades SET nombre = %s WHERE id = %s"
-    cursor.execute(sql, (datos.get("nombre"), id_hab))
-    conec.commit()
+        cursor = conec.cursor(buffered=True)
+        cursor.execute("SELECT id_HAB FROM HABILIDADES WHERE id_HAB = %s", (id_hab,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "HABILIDAD INEXISTENTE"}), 404
 
-    cursor.close()
-    conec.close()
+        sql = "UPDATE HABILIDADES SET nombre = %s WHERE id_HAB = %s"
+        cursor.execute(sql, (datos.get("nombre").strip(), id_hab))
+        conec.commit()
 
-    return {"mensaje": "HABILIDAD ACTUALIZADA"}
+        return jsonify({"mensaje": "HABILIDAD ACTUALIZADA", "id_habilidad": id_hab, "id_HAB": id_hab}), 200
 
-#ELIMINAR HABILIDAD
+    except Exception as error:
+        print("ERROR ACTUALIZANDO HABILIDAD:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+
+
+# ELIMINAR HABILIDAD
 @app.route("/api/habilidades/<int:id_hab>", methods=["DELETE"])
-
 def eliminar_habilidad(id_hab):
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT id FROM habilidades WHERE id = %s", (id_hab,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "Habilidad No Existe"}, 404
+        cursor = conec.cursor(buffered=True)
+        cursor.execute("SELECT id_HAB FROM HABILIDADES WHERE id_HAB = %s", (id_hab,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "HABILIDAD INEXISTENTE"}), 404
 
-    sql = "DELETE FROM habilidades WHERE id = %s"
-    cursor.execute(sql, (id_hab,))
-    conec.commit()
+        sql = "DELETE FROM HABILIDADES WHERE id_HAB = %s"
+        cursor.execute(sql, (id_hab,))
+        conec.commit()
 
-    cursor.close()
-    conec.close()
+        return jsonify({"mensaje": "HABILIDAD ELIMINADA", "id_habilidad": id_hab, "id_HAB": id_hab}), 200
 
-    return {"mensaje": "HABILIDAD ELIMINADA"}
+    except Exception as error:
+        print("ERROR ELIMINANDO HABILIDAD:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+# CURSOS
 
-
-
-#CURSOS
+# REGISTRAR CURSO
 @app.route("/api/hojasvida/<int:id_hv>/cursos", methods=["POST"])
 @app.route("/api/CURSOS/<int:id_hv>", methods=["POST"])
-
-#REGISTRAR CURSO
 def registrar_curso(id_hv):
-    datos = request.get_json()
-    if not datos or "nombre" not in datos:
-        return {"mensaje": "NOMBRE VACÍO"}, 400
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+    conec = None
+    cursor = None
+    try:
+        datos = request.get_json(silent=True)
+        if not datos or "nombre" not in datos or not str(datos["nombre"]).strip():
+            return jsonify({"mensaje": "NOMBRE VACÍO"}), 400
 
-    cursor.execute("SELECT id FROM hojas_vida WHERE id = %s", (id_hv,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "HOJA DE VIDA INEXISTENTE"}, 404
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    sql = "INSERT INTO cursos (hoja_vida_id, nombre) VALUES (%s, %s)"
-    cursor.execute(sql, (id_hv, datos.get("nombre")))
-    conec.commit()
-    id_curso = cursor.lastrowid
+        cursor = conec.cursor(buffered=True)
+        cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE id_HV = %s", (id_hv,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "HOJA DE VIDA INEXISTENTE"}), 404
 
-    cursor.close()
-    conec.close()
+        sql = "INSERT INTO CURSOS (hoja_vida_id, nombre) VALUES (%s, %s)"
+        cursor.execute(sql, (id_hv, datos.get("nombre").strip()))
+        conec.commit()
+        id_curso = cursor.lastrowid
 
-    return {
-        "mensaje": "CURSO REGISTRADo",
-        "id_curso": id_curso,
-        "hoja_vida_id": id_hv,
-    }, 201
+        return jsonify({
+            "mensaje": "CURSO REGISTRADO",
+            "id_curso": id_curso,
+            "id_CUR": id_curso,
+            "hoja_vida_id": id_hv,
+        }), 201
 
-#OBTENER CURSO
+    except Exception as error:
+        print("ERROR REGISTRANDO CURSO:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+
+
+# LISTAR CURSOS DE UNA HOJA DE VIDA
 @app.route("/api/hojasvida/<int:id_hv>/cursos", methods=["GET"])
-
 def listar_cursos_hoja_vida(id_hv):
-    conec = conectar_bd()
-    cursor = conec.cursor(dictionary=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT * FROM cursos WHERE hoja_vida_id = %s", (id_hv,))
-    resultado = cursor.fetchall()
+        cursor = conec.cursor(dictionary=True)
+        cursor.execute("SELECT id_HV FROM HOJAS_VIDA WHERE id_HV = %s", (id_hv,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "HOJA DE VIDA INEXISTENTE"}), 404
 
-    cursor.close()
-    conec.close()
-    return {"hoja_vida_id": id_hv, "cursos": resultado}, 200
+        cursor.execute("SELECT id_CUR, id_CUR AS id, hoja_vida_id, nombre FROM CURSOS WHERE hoja_vida_id = %s", (id_hv,))
+        resultado = cursor.fetchall()
 
+        return jsonify({"hoja_vida_id": id_hv, "cursos": resultado}), 200
+
+    except Exception as error:
+        print("ERROR LISTANDO CURSOS:", error)
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+
+
+# CONSULTAR CURSO POR ID
 @app.route("/api/cursos/<int:id_cur>", methods=["GET"])
 def obtener_curso(id_cur):
-    conec = conectar_bd()
-    cursor = conec.cursor(dictionary=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT * FROM cursos WHERE id = %s", (id_cur,))
-    curso = cursor.fetchone()
+        cursor = conec.cursor(dictionary=True)
+        cursor.execute("SELECT id_CUR, id_CUR AS id, hoja_vida_id, nombre FROM CURSOS WHERE id_CUR = %s", (id_cur,))
+        curso = cursor.fetchone()
 
-    cursor.close()
-    conec.close()
+        if not curso:
+            return jsonify({"mensaje": "CURSO NO ENCONTRADO"}), 404
+        return jsonify({"curso": curso}), 200
 
-    if not curso:
-        return {"mensaje": "CURSO NO ENCONTRADO"}, 404
-    return {"curso": curso}, 200
+    except Exception as error:
+        print("ERROR OBTENIENDO CURSO:", error)
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 
-#ACTUALIZAR CURSO
+
+# ACTUALIZAR CURSO
 @app.route("/api/cursos/<int:id_cur>", methods=["PUT"])
 def actualizar_curso(id_cur):
-    datos = request.get_json()
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+    conec = None
+    cursor = None
+    try:
+        datos = request.get_json(silent=True)
+        if not datos or "nombre" not in datos or not str(datos["nombre"]).strip():
+            return jsonify({"mensaje": "NOMBRE VACÍO"}), 400
 
-    cursor.execute("SELECT id FROM cursos WHERE id = %s", (id_cur,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "Curso No Existe"}, 404
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    sql = "UPDATE cursos SET nombre = %s WHERE id = %s"
-    cursor.execute(sql, (datos.get("nombre"), id_cur))
-    conec.commit()
+        cursor = conec.cursor(buffered=True)
+        cursor.execute("SELECT id_CUR FROM CURSOS WHERE id_CUR = %s", (id_cur,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "CURSO INEXISTENTE"}), 404
 
-    cursor.close()
-    conec.close()
-    return {"mensaje": "CURSO ACUTUALIZAO"}
+        sql = "UPDATE CURSOS SET nombre = %s WHERE id_CUR = %s"
+        cursor.execute(sql, (datos.get("nombre").strip(), id_cur))
+        conec.commit()
 
-#ELIMINAR CURSO
+        return jsonify({"mensaje": "CURSO ACTUALIZADO", "id_curso": id_cur, "id_CUR": id_cur}), 200
+
+    except Exception as error:
+        print("ERROR ACTUALIZANDO CURSO:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+
+
+# ELIMINAR CURSO
 @app.route("/api/cursos/<int:id_cur>", methods=["DELETE"])
 def eliminar_curso(id_cur):
-    conec = conectar_bd()
-    cursor = conec.cursor(buffered=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT id FROM cursos WHERE id = %s", (id_cur,))
-    if not cursor.fetchone():
-        cursor.close()
-        conec.close()
-        return {"mensaje": "CURSO INEXISTENTE"}, 404
+        cursor = conec.cursor(buffered=True)
+        cursor.execute("SELECT id_CUR FROM CURSOS WHERE id_CUR = %s", (id_cur,))
+        if not cursor.fetchone():
+            return jsonify({"mensaje": "CURSO INEXISTENTE"}), 404
 
-    sql = "DELETE FROM cursos WHERE id = %s"
-    cursor.execute(sql, (id_cur,))
-    conec.commit()
+        sql = "DELETE FROM CURSOS WHERE id_CUR = %s"
+        cursor.execute(sql, (id_cur,))
+        conec.commit()
 
-    cursor.close()
-    conec.close()
-    return {"mensaje": "CURSO ELIMINADO"}
+        return jsonify({"mensaje": "CURSO ELIMINADO", "id_curso": id_cur, "id_CUR": id_cur}), 200
 
-#HOJA DE VIDA
+    except Exception as error:
+        print("ERROR ELIMINANDO CURSO:", error)
+        if conec and conec.is_connected():
+            conec.rollback()
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
+# HOJA DE VIDA COMPLETA
+
+# CONSULTA HOJA DE VIDA COMPLETA
 @app.route("/api/HOJAS_VIDA/<int:id>/completa", methods=["GET"])
 @app.route("/api/hojasvida/<int:id>/completa", methods=["GET"])
-
-#CONSULTA HV COMPLET
 def consultar_hoja_vida_completa(id):
-    conec = conectar_bd()
-    cursor = conec.cursor(dictionary=True)
+    conec = None
+    cursor = None
+    try:
+        conec = conectar_bd()
+        if conec is None or not conec.is_connected():
+            return jsonify({"mensaje": "//NO CONNECTION//"}), 500
 
-    cursor.execute("SELECT * FROM hojas_vida WHERE id = %s", (id,))
-    hoja_vida = cursor.fetchone()
+        cursor = conec.cursor(dictionary=True)
 
-    if hoja_vida is None:
-        cursor.close()
-        conec.close()
-        return {"mensaje": "HOJA DE VIDA NO ENCONTRADA"}, 404
+        cursor.execute("SELECT id_HV, id_HV AS id, usuario_ID, nombre, edad, ciudad, correo, foto, foto AS fotografia, programa, ficha, jornada FROM HOJAS_VIDA WHERE id_HV = %s", (id,))
+        hoja_vida = cursor.fetchone()
 
-    cursor.execute("SELECT * FROM estudios WHERE hoja_vida_id = %s", (id,))
-    estudios = cursor.fetchall()
+        if hoja_vida is None:
+            return jsonify({"mensaje": "HOJA DE VIDA NO ENCONTRADA"}), 404
 
-    cursor.execute("SELECT * FROM cursos WHERE hoja_vida_id = %s", (id,))
-    cursos = cursor.fetchall()
+        cursor.execute("SELECT id_EST, id_EST AS id, hoja_vida_id, nivel, institucion, titulo, anio_graduacion FROM ESTUDIOS WHERE hoja_vida_id = %s", (id,))
+        estudios = cursor.fetchall()
 
-    cursor.execute("SELECT * FROM experiencias WHERE hoja_vida_id = %s", (id,))
-    experiencias = cursor.fetchall()
+        cursor.execute("SELECT id_CUR, id_CUR AS id, hoja_vida_id, nombre FROM CURSOS WHERE hoja_vida_id = %s", (id,))
+        cursos = cursor.fetchall()
 
-    for experiencia in experiencias:
-        cursor.execute("SELECT id, experiencia_id, nombre FROM habilidades WHERE experiencia_id = %s",(experiencia["id"],),) 
-        experiencia["habilidades"] = cursor.fetchall()
+        cursor.execute("SELECT id_EXP, id_EXP AS id, hoja_vida_id, empresa, cargo, tiempo, funciones FROM EXPERIENCIAS WHERE hoja_vida_id = %s", (id,))
+        experiencias = cursor.fetchall()
 
-    cursor.close()
-    conec.close()
+        for experiencia in experiencias:
+            exp_id = experiencia.get("id_EXP") or experiencia.get("id")
+            cursor.execute("SELECT id_HAB, id_HAB AS id, experiencia_id, nombre FROM HABILIDADES WHERE experiencia_id = %s", (exp_id,))
+            experiencia["habilidades"] = cursor.fetchall()
 
-    return {
-        "hoja_de_vida": hoja_vida,
-        "estudios": estudios,
-        "cursos": cursos,
-        "experiencias": experiencias,
-    }, 200
+        return jsonify({
+            "hoja_de_vida": hoja_vida,
+            "estudios": estudios,
+            "cursos": cursos,
+            "experiencias": experiencias,
+        }), 200
+
+    except Exception as error:
+        print("ERROR CONSULTANDO HOJA DE VIDA COMPLETA:", error)
+        return jsonify({"mensaje": "SERVER FAILURE", "error": str(error)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conec and conec.is_connected():
+            conec.close()
 
 
-#FLASK
+# INICIO DE LA APLICACIÓN
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=True)
