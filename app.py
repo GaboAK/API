@@ -276,6 +276,49 @@ def registrohvida():
             conec.close()
 
 
+# HELPER: CARGAR DETALLES DE HOJA DE VIDA (Estudios, Cursos, Experiencias, Habilidades)
+def cargar_detalles_hoja_vida(cursor, id_hv):
+    # Consultar estudios
+    cursor.execute(
+        "SELECT id_EST, id_EST AS id, hoja_vida_id, nivel, institucion, titulo, anio_graduacion FROM ESTUDIOS WHERE hoja_vida_id = %s",
+        (id_hv,)
+    )
+    estudios = cursor.fetchall()
+
+    # Consultar cursos
+    cursor.execute(
+        "SELECT id_CUR, id_CUR AS id, hoja_vida_id, nombre FROM CURSOS WHERE hoja_vida_id = %s",
+        (id_hv,)
+    )
+    cursos = cursor.fetchall()
+
+    # Consultar experiencias y sus habilidades
+    cursor.execute(
+        "SELECT id_EXP, id_EXP AS id, hoja_vida_id, empresa, cargo, tiempo, funciones FROM EXPERIENCIAS WHERE hoja_vida_id = %s",
+        (id_hv,)
+    )
+    experiencias = cursor.fetchall()
+
+    todas_habilidades = []
+    for exp in experiencias:
+        exp_id = exp.get("id_EXP") or exp.get("id")
+        cursor.execute(
+            "SELECT id_HAB, id_HAB AS id, experiencia_id, nombre FROM HABILIDADES WHERE experiencia_id = %s",
+            (exp_id,)
+        )
+        habs = cursor.fetchall()
+        exp["habilidades"] = habs
+        for h in habs:
+            todas_habilidades.append({
+                "id_HAB": h.get("id_HAB"),
+                "id": h.get("id"),
+                "nombre": h.get("nombre"),
+                "experiencia_id": exp_id
+            })
+
+    return estudios, cursos, experiencias, todas_habilidades
+
+
 # CONSULTAR TODAS LAS HOJAS DE VIDA (Sólo Reclutadores)
 @app.route("/api/hojasdevida", methods=["GET"])
 @app.route("/api/hojasvida", methods=["GET"])
@@ -291,6 +334,15 @@ def obtener_hojasvida():
         cursor = conec.cursor(dictionary=True)
         cursor.execute("SELECT id_HV, id_HV AS id, usuario_ID, nombre, edad, ciudad, correo, foto, foto AS fotografia, programa, ficha, jornada FROM HOJAS_VIDA")
         hojasdevida = cursor.fetchall()
+
+        # Adjuntar información detallada a cada hoja de vida
+        for hoja in hojasdevida:
+            id_hv = hoja.get("id_HV") or hoja.get("id")
+            estudios, cursos, experiencias, habilidades = cargar_detalles_hoja_vida(cursor, id_hv)
+            hoja["estudios"] = estudios
+            hoja["cursos"] = cursos
+            hoja["experiencias"] = experiencias
+            hoja["habilidades"] = habilidades
 
         return jsonify({"hojas_vida": hojasdevida}), 200
     except Exception as error:
@@ -320,6 +372,13 @@ def obtener_hojasvidaid(id):
 
         if hoja is None:
             return jsonify({"mensaje": "HOJA DE VIDA NO ENCONTRADA"}), 404
+
+        estudios, cursos, experiencias, habilidades = cargar_detalles_hoja_vida(cursor, id)
+        hoja["estudios"] = estudios
+        hoja["cursos"] = cursos
+        hoja["experiencias"] = experiencias
+        hoja["habilidades"] = habilidades
+
         return jsonify(hoja), 200
     except Exception as error:
         print("ERROR OBTENIENDO HOJA DE VIDA:", error)
@@ -1142,25 +1201,18 @@ def consultar_hoja_vida_completa(id):
         if hoja_vida is None:
             return jsonify({"mensaje": "HOJA DE VIDA NO ENCONTRADA"}), 404
 
-        cursor.execute("SELECT id_EST, id_EST AS id, hoja_vida_id, nivel, institucion, titulo, anio_graduacion FROM ESTUDIOS WHERE hoja_vida_id = %s", (id,))
-        estudios = cursor.fetchall()
-
-        cursor.execute("SELECT id_CUR, id_CUR AS id, hoja_vida_id, nombre FROM CURSOS WHERE hoja_vida_id = %s", (id,))
-        cursos = cursor.fetchall()
-
-        cursor.execute("SELECT id_EXP, id_EXP AS id, hoja_vida_id, empresa, cargo, tiempo, funciones FROM EXPERIENCIAS WHERE hoja_vida_id = %s", (id,))
-        experiencias = cursor.fetchall()
-
-        for experiencia in experiencias:
-            exp_id = experiencia.get("id_EXP") or experiencia.get("id")
-            cursor.execute("SELECT id_HAB, id_HAB AS id, experiencia_id, nombre FROM HABILIDADES WHERE experiencia_id = %s", (exp_id,))
-            experiencia["habilidades"] = cursor.fetchall()
+        estudios, cursos, experiencias, habilidades = cargar_detalles_hoja_vida(cursor, id)
+        hoja_vida["estudios"] = estudios
+        hoja_vida["cursos"] = cursos
+        hoja_vida["experiencias"] = experiencias
+        hoja_vida["habilidades"] = habilidades
 
         return jsonify({
             "hoja_de_vida": hoja_vida,
             "estudios": estudios,
             "cursos": cursos,
             "experiencias": experiencias,
+            "habilidades": habilidades,
         }), 200
 
     except Exception as error:
